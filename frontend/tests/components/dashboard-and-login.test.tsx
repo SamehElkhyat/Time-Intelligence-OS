@@ -3,8 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { json, makeClient, Providers, stubApi } from './test-utils';
 
+const replace = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ replace, push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => '/',
 }));
@@ -35,7 +36,10 @@ const dayAvailability = {
   windows: [], conflicts: [], strip: [], blocks: [], summary: {},
 };
 
-beforeEach(() => vi.stubGlobal('EventSource', undefined));
+beforeEach(() => {
+  replace.mockClear();
+  vi.stubGlobal('EventSource', undefined);
+});
 afterEach(() => vi.unstubAllGlobals());
 
 const mount = () => render(<Providers client={makeClient()}><DashboardView /></Providers>);
@@ -124,6 +128,38 @@ describe('Login form', () => {
     expect(await screen.findByText('Incorrect email or password.')).toBeInTheDocument();
     await waitFor(() => expect(api.calls).toHaveLength(1));
     expect(api.calls[0]!.body).toEqual({ email: 'ana@example.com', password: 'wrong-password' });
+  });
+
+  const sessionPayload = {
+    user: { id: 'u', email: 'ana@example.com', displayName: 'Ana', emailVerified: true, isDemo: false, createdAt: '2026-01-01T00:00:00.000Z' },
+    preference: { timezone: 'UTC', use24HourClock: true },
+    csrfToken: 'csrf',
+  };
+  const signIn = async () => {
+    const user = userEvent.setup();
+    render(<Providers><LoginPage /></Providers>);
+    await user.type(screen.getByLabelText('Email'), 'ana@example.com');
+    await user.type(screen.getByLabelText('Password'), 'correct-password');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+  };
+
+  it('goes to the dashboard once the session cookie is confirmed', async () => {
+    const api = stubApi({ 'POST /auth/login': () => sessionPayload, 'GET /auth/session': () => sessionPayload });
+    vi.stubGlobal('fetch', vi.fn(api.fn));
+    await signIn();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/'));
+  });
+
+  it('explains it instead of silently bouncing when the browser did not keep the session cookie', async () => {
+    // Login succeeds, but the cookie was dropped (e.g. Secure cookie over plain http), so the next call is anonymous.
+    const api = stubApi({
+      'POST /auth/login': () => sessionPayload,
+      'GET /auth/session': () => json(401, { statusCode: 401, code: 'UNAUTHENTICATED', message: 'Sign in to continue.' }),
+    });
+    vi.stubGlobal('fetch', vi.fn(api.fn));
+    await signIn();
+    expect(await screen.findByText(/did not keep the session cookie/i)).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it('marks invalid fields for assistive technology', async () => {

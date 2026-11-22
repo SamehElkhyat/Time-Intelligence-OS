@@ -13,6 +13,10 @@ import { ApiError } from '@/lib/api/client';
 import { qk } from '@/lib/query-keys';
 import { authApi } from '@/services';
 
+const SESSION_COOKIE_BLOCKED =
+  'Your credentials are correct, but your browser did not keep the session cookie, so you cannot be signed in. ' +
+  'This is a deployment setting: serve the site over HTTPS (or set COOKIE_SECURE=false for plain http), and call the API through the same origin.';
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -24,6 +28,18 @@ function LoginForm() {
     setFormError(null);
     try {
       const session = await authApi.login(values);
+      // The password was right, but the app only works if the browser kept the session cookie.
+      // A `Secure` cookie sent over plain http (or dropped by a cross-site API URL) is discarded
+      // silently, and the route guard would then bounce the user straight back here with no hint.
+      try {
+        await authApi.session();
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          setFormError(SESSION_COOKIE_BLOCKED);
+          return;
+        }
+        throw e;
+      }
       qc.setQueryData(qk.session, session);
       router.replace(safeNext(params.get('next')));
     } catch (e) {

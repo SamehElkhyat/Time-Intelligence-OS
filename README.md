@@ -70,6 +70,16 @@ docker compose --profile apps up --build     # Postgres, Redis, backend, fronten
 
 This runs the production builds over plain `http://localhost`, using `ALLOW_INSECURE_COOKIES=true` (see `docs/ARCHITECTURE.md`). Behind HTTPS, set `COOKIE_SECURE=true` and a real `SESSION_SECRET`.
 
+### Deployment checklist: "I sign in but stay on the login page"
+
+The session lives in an HttpOnly cookie, so login only works if the browser keeps it:
+
+* **Serve the site over HTTPS** and set `COOKIE_SECURE=true`. A `Secure` cookie sent over plain `http://` (any host except `localhost`) is silently discarded by the browser. For a plain-http demo set `COOKIE_SECURE=false` and `ALLOW_INSECURE_COOKIES=true` instead.
+* **Keep the API same-origin.** Leave `NEXT_PUBLIC_API_URL` empty so the browser calls `/api/*` on the frontend's own domain, and set `API_INTERNAL_URL` to the backend's internal address **at frontend build time** (Next bakes the rewrite target into the build). Pointing the browser straight at a different domain makes the cookie third-party, and `SameSite=Lax` blocks it.
+* Set `FRONTEND_ORIGIN` on the backend to the public site URL.
+
+The login page now checks that the cookie was actually kept and shows this explanation instead of silently returning to the form.
+
 ## The AI Time Coach
 
 With `ANTHROPIC_API_KEY` set on the backend, the coach uses a real model and reads your data **only** through authorized, read-only tools. Without a key it runs a deterministic rule-based engine that is **clearly labelled "Demo mode"** in the API (`isDemo`, `mode: "demo"`) and the UI — it never pretends to be a language model. Schedule changes are only ever *proposals* that you confirm. Details: `backend/docs/SECURITY.md`.
