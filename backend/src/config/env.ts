@@ -23,6 +23,11 @@ const schema = z.object({
   COOKIE_SECURE: bool.default(false),
   /** Escape hatch for running the production build over plain http://localhost (docker compose demo). Never set it on a real deployment. */
   ALLOW_INSECURE_COOKIES: bool.default(false),
+  /**
+   * SameSite policy of the session cookie. `lax` suits the default same-origin /api setup. `none` is only for a
+   * deployment where the browser calls the API on a different site, and browsers reject it unless COOKIE_SECURE=true.
+   */
+  COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
   COOKIE_DOMAIN: z.preprocess(emptyToUndefined, z.string().optional()),
   ANTHROPIC_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   AI_MODEL: z.string().default('claude-opus-5-5'),
@@ -56,6 +61,9 @@ export function loadEnv(): Env {
   }
   if (parsed.data.NODE_ENV === 'production' && !parsed.data.COOKIE_SECURE && !parsed.data.ALLOW_INSECURE_COOKIES) {
     throw new Error('COOKIE_SECURE must be true in production (set ALLOW_INSECURE_COOKIES=true only for a local http://localhost demo)');
+  }
+  if (parsed.data.COOKIE_SAMESITE === 'none' && !parsed.data.COOKIE_SECURE) {
+    throw new Error('COOKIE_SAMESITE=none requires COOKIE_SECURE=true: browsers discard a SameSite=None cookie that is not Secure, so nobody could sign in');
   }
   cached = parsed.data;
   return cached;

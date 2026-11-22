@@ -15,7 +15,7 @@ import { authApi } from '@/services';
 
 const SESSION_COOKIE_BLOCKED =
   'Your credentials are correct, but your browser did not keep the session cookie, so you cannot be signed in. ' +
-  'This is a deployment setting: serve the site over HTTPS (or set COOKIE_SECURE=false for plain http), and call the API through the same origin.';
+  'This is a deployment setting: serve the site over HTTPS, and either call the API through the same origin (recommended) or set COOKIE_SAMESITE=none with COOKIE_SECURE=true on the backend.';
 
 function LoginForm() {
   const router = useRouter();

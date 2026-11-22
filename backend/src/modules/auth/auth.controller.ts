@@ -35,7 +35,7 @@ export class AuthController {
     return {
       httpOnly: true,
       secure: this.env.COOKIE_SECURE,
-      sameSite: 'none',
+      sameSite: this.env.COOKIE_SAMESITE,
       path: '/',
       domain: this.env.COOKIE_DOMAIN,
       maxAge: this.env.SESSION_TTL_DAYS * 24 * MS_PER_HOUR,

@@ -77,6 +77,7 @@ The session lives in an HttpOnly cookie, so login only works if the browser keep
 * **Serve the site over HTTPS** and set `COOKIE_SECURE=true`. A `Secure` cookie sent over plain `http://` (any host except `localhost`) is silently discarded by the browser. For a plain-http demo set `COOKIE_SECURE=false` and `ALLOW_INSECURE_COOKIES=true` instead.
 * **Keep the API same-origin.** Leave `NEXT_PUBLIC_API_URL` empty so the browser calls `/api/*` on the frontend's own domain, and set `API_INTERNAL_URL` to the backend's internal address **at frontend build time** (Next bakes the rewrite target into the build). Pointing the browser straight at a different domain makes the cookie third-party, and `SameSite=Lax` blocks it.
 * Set `FRONTEND_ORIGIN` on the backend to the public site URL.
+* **Only if the browser must call the API on a different site** (for example two separate `onrender.com` services with `NEXT_PUBLIC_API_URL` set): set `COOKIE_SAMESITE=none` together with `COOKIE_SECURE=true`. The default is `lax`; the backend refuses `none` without `Secure`, because browsers discard such a cookie. In this mode the cookie belongs to the API's host, so the frontend's route guard stands down and the app itself validates the session. Safari and some Chrome configurations block third-party cookies entirely, so prefer the same-origin setup.
 
 The login page now checks that the cookie was actually kept and shows this explanation instead of silently returning to the form.
 
