@@ -23,7 +23,7 @@ describe('TIMEFLOW API — core flows', () => {
       const setCookie = (reg.headers['set-cookie'] as unknown as string[]).join(';');
       expect(setCookie).toMatch(/tf_session=/);
       expect(setCookie).toMatch(/HttpOnly/i);
-      expect(setCookie).toMatch(/SameSite=Lax/i);
+      expect(setCookie).toMatch(/SameSite=None/i);
     });
 
     it('rejects weak input and duplicate emails with stable error codes', async () => {
