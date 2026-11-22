@@ -1,0 +1,772 @@
+// TIMEFLOW database schema.
+//
+// Conventions
+//  - Every instant is stored as timestamptz(3) in UTC.
+//  - Local calendar values (a "day" as the user sees it) are stored as DATE and are
+//    always interpreted with the user's IANA timezone (UserPreference.timezone).
+//  - Durations are integer seconds (…Sec) or integer minutes (…Min / …Minute). Never floats.
+//  - Wall-clock times inside a day are integer minutes from local midnight (0..1440).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// Five-step scale used for both energy and focus (user state and task requirement).
+enum Level {
+  VERY_LOW
+  LOW
+  MODERATE
+  HIGH
+  VERY_HIGH
+}
+
+enum ActivityStatus {
+  PLANNED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  SKIPPED
+  CANCELLED
+}
+
+enum TaskStatus {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+/// How time spent in a category is interpreted by analytics and leakage detection.
+enum TimeClass {
+  PRODUCTIVE
+  REST
+  LEISURE
+  NEUTRAL
+}
+
+enum SessionStatus {
+  RUNNING
+  PAUSED
+  STOPPED
+}
+
+enum SessionSource {
+  TIMER
+  MANUAL
+}
+
+enum TimeOfDay {
+  ANY
+  MORNING
+  AFTERNOON
+  EVENING
+  NIGHT
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum AvailabilityKind {
+  AVAILABLE
+  BLOCKED
+}
+
+enum WindowConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum RecommendationStatus {
+  GENERATED
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+enum NotificationType {
+  ACTIVITY_REMINDER
+  DEADLINE_APPROACHING
+  TIMER_LONG_RUNNING
+  REPORT_READY
+  RECOMMENDATION
+  SYSTEM
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum AiRole {
+  USER
+  ASSISTANT
+}
+
+enum PendingActionStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  EXPIRED
+}
+
+// ─── Identity ────────────────────────────────────────────────────────────────
+
+model User {
+  id              String    @id @default(uuid()) @db.Uuid
+  email           String    @unique @db.VarChar(254)
+  passwordHash    String
+  displayName     String    @db.VarChar(80)
+  emailVerifiedAt DateTime? @db.Timestamptz(3)
+  /// Seeded demonstration account. Demo data is never mixed with real accounts.
+  isDemo          Boolean   @default(false)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+
+  preference      UserPreference?
+  sessions        Session[]
+  authTokens      AuthToken[]
+  availability    UserAvailability[]
+  categories      ActivityCategory[]
+  activities      Activity[]
+  activitySessions ActivitySession[]
+  segments        SessionSegment[]
+  tasks           Task[]
+  schedules       Schedule[]
+  scheduleEvents  ScheduleEvent[]
+  recurrenceRules RecurrenceRule[]
+  windows         AvailabilityWindow[]
+  recommendations Recommendation[]
+  energyLogs      EnergyLog[]
+  metrics         ProductivityMetric[]
+  dailyAnalytics  DailyAnalytics[]
+  weeklyAnalytics WeeklyAnalytics[]
+  notifications   Notification[]
+  conversations   AIConversation[]
+  aiInteractions  AIInteraction[]
+  pendingActions  AIPendingAction[]
+  auditLogs       AuditLog[]
+}
+
+/// Server-side session. The cookie carries an opaque random token; only its SHA-256 is stored.
+model Session {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique @db.Char(64)
+  userAgent  String?   @db.VarChar(400)
+  ipAddress  String?   @db.VarChar(64)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  lastSeenAt DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt  DateTime  @db.Timestamptz(3)
+  revokedAt  DateTime? @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+}
+
+/// Single-use tokens for email verification and password reset (hash only).
+model AuthToken {
+  id        String        @id @default(uuid()) @db.Uuid
+  userId    String        @db.Uuid
+  type      AuthTokenType
+  tokenHash String        @unique @db.Char(64)
+  expiresAt DateTime      @db.Timestamptz(3)
+  usedAt    DateTime?     @db.Timestamptz(3)
+  createdAt DateTime      @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+model UserPreference {
+  userId                String    @id @db.Uuid
+  /// IANA zone, e.g. "Africa/Cairo". All local-calendar interpretation uses this.
+  timezone              String    @default("UTC") @db.VarChar(64)
+  locale                String    @default("en-US") @db.VarChar(16)
+  /// ISO weekday the week starts on (1 = Monday … 7 = Sunday).
+  weekStartsOn          Int       @default(1) @db.SmallInt
+  use24HourClock        Boolean   @default(true)
+  /// Default active hours, used when no explicit UserAvailability rows exist for a weekday.
+  dayStartMinute        Int       @default(420) @db.SmallInt
+  dayEndMinute          Int       @default(1380) @db.SmallInt
+  /// Padding kept free around fixed commitments.
+  bufferMinutes         Int       @default(10) @db.SmallInt
+  /// Free windows shorter than this are not offered.
+  minSlotMinutes        Int       @default(15) @db.SmallInt
+  deepWorkMinMinutes    Int       @default(50) @db.SmallInt
+  dailyFocusGoalMinutes Int       @default(240) @db.SmallInt
+  /// Continuous scheduled work after which a break is suggested.
+  breakAfterMinutes     Int       @default(90) @db.SmallInt
+  /// Optional self-declared best focus window (local minutes). Null = not declared.
+  focusPeakStartMinute  Int?      @db.SmallInt
+  focusPeakEndMinute    Int?      @db.SmallInt
+  notifyActivityReminders Boolean @default(true)
+  notifyDeadlines       Boolean   @default(true)
+  notifyWeeklyReport    Boolean   @default(true)
+  reminderLeadMinutes   Int       @default(10) @db.SmallInt
+  onboardingCompletedAt DateTime? @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Explicit weekly availability declared by the user (local wall-clock minutes).
+model UserAvailability {
+  id          String           @id @default(uuid()) @db.Uuid
+  userId      String           @db.Uuid
+  /// ISO weekday 1..7
+  weekday     Int              @db.SmallInt
+  startMinute Int              @db.SmallInt
+  endMinute   Int              @db.SmallInt
+  kind        AvailabilityKind @default(AVAILABLE)
+  label       String?          @db.VarChar(80)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, weekday])
+}
+
+// ─── Activities & tracking ───────────────────────────────────────────────────
+
+model ActivityCategory {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  /// Stable machine key: work, learning, personal, exercise, meetings, rest, entertainment, other
+  key       String    @db.VarChar(40)
+  name      String    @db.VarChar(60)
+  color     String    @db.VarChar(9)
+  timeClass TimeClass @default(NEUTRAL)
+  /// Meetings and similar commitments get protective buffers by default.
+  isCommitment Boolean @default(false)
+  position  Int       @default(0) @db.SmallInt
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activities     Activity[]
+  tasks          Task[]
+  scheduleEvents ScheduleEvent[]
+
+  @@unique([userId, key])
+}
+
+model Activity {
+  id                   String         @id @default(uuid()) @db.Uuid
+  userId               String         @db.Uuid
+  categoryId           String         @db.Uuid
+  title                String         @db.VarChar(160)
+  description          String?        @db.VarChar(4000)
+  notes                String?        @db.VarChar(8000)
+  /// The plan. Null for ad-hoc activities that were only ever tracked.
+  plannedStart         DateTime?      @db.Timestamptz(3)
+  plannedEnd           DateTime?      @db.Timestamptz(3)
+  estimatedDurationSec Int?
+  /// Denormalised sum of tracked segments; maintained transactionally by the timer engine.
+  actualDurationSec    Int            @default(0)
+  priority             Priority       @default(MEDIUM)
+  energyRequired       Level          @default(MODERATE)
+  focusRequired        Level          @default(MODERATE)
+  status               ActivityStatus @default(PLANNED)
+  /// Fixed commitments cannot be moved by the scheduler and receive buffers.
+  isFixed              Boolean        @default(false)
+  tags                 String[]       @default([])
+  /// Set when this activity is a scheduled work block for a task.
+  taskId               String?        @db.Uuid
+  /// Set when this activity materialises one occurrence of a recurring schedule event.
+  scheduleEventId      String?        @db.Uuid
+  occurrenceDate       DateTime?      @db.Date
+  rescheduleCount      Int            @default(0)
+  completedAt          DateTime?      @db.Timestamptz(3)
+  createdAt            DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime       @updatedAt @db.Timestamptz(3)
+  /// Soft delete: tracked history must survive removal from the plan.
+  deletedAt            DateTime?      @db.Timestamptz(3)
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category      ActivityCategory  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  task          Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  scheduleEvent ScheduleEvent?    @relation(fields: [scheduleEventId], references: [id], onDelete: SetNull)
+  sessions      ActivitySession[]
+
+  @@unique([scheduleEventId, occurrenceDate])
+  @@index([userId, plannedStart, plannedEnd])
+  @@index([userId, status])
+  @@index([userId, categoryId])
+  @@index([userId, deletedAt, createdAt])
+  @@index([taskId])
+}
+
+/// One timer session (or one manual entry) for an activity. A session is made of
+/// one or more contiguous segments; pausing closes a segment, resuming opens another.
+model ActivitySession {
+  id          String        @id @default(uuid()) @db.Uuid
+  userId      String        @db.Uuid
+  activityId  String        @db.Uuid
+  status      SessionStatus @default(RUNNING)
+  source      SessionSource @default(TIMER)
+  startedAt   DateTime      @db.Timestamptz(3)
+  endedAt     DateTime?     @db.Timestamptz(3)
+  /// Sum of closed segments in whole seconds. Final once status = STOPPED.
+  durationSec Int           @default(0)
+  pauseCount  Int           @default(0)
+  note        String?       @db.VarChar(2000)
+  /// Optimistic concurrency token for timer transitions.
+  version     Int           @default(0)
+  /// True when the stop time was reconstructed (e.g. abandoned timer auto-closed).
+  autoStopped Boolean       @default(false)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activity Activity         @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  segments SessionSegment[]
+
+  // A partial unique index (see migration SQL) guarantees one active session per user:
+  //   UNIQUE (userId) WHERE status IN ('RUNNING','PAUSED')
+  @@index([userId, startedAt])
+  @@index([activityId, startedAt])
+  @@index([userId, status])
+}
+
+model SessionSegment {
+  id        String    @id @default(uuid()) @db.Uuid
+  sessionId String    @db.Uuid
+  /// Denormalised for range scans without a join.
+  userId    String    @db.Uuid
+  startedAt DateTime  @db.Timestamptz(3)
+  /// Null while the segment is running.
+  endedAt   DateTime? @db.Timestamptz(3)
+
+  session ActivitySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, startedAt])
+  @@index([userId, startedAt, endedAt])
+}
+
+model EnergyLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  recordedAt DateTime @default(now()) @db.Timestamptz(3)
+  energy     Level
+  focus      Level
+  note       String?  @db.VarChar(500)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, recordedAt])
+}
+
+// ─── Tasks ───────────────────────────────────────────────────────────────────
+
+model Task {
+  id                   String     @id @default(uuid()) @db.Uuid
+  userId               String     @db.Uuid
+  categoryId           String?    @db.Uuid
+  title                String     @db.VarChar(160)
+  description          String?    @db.VarChar(4000)
+  estimatedDurationSec Int
+  priority             Priority   @default(MEDIUM)
+  deadline             DateTime?  @db.Timestamptz(3)
+  energyRequired       Level      @default(MODERATE)
+  focusRequired        Level      @default(MODERATE)
+  /// 1 (trivial) … 5 (very complex)
+  complexity           Int        @default(3) @db.SmallInt
+  status               TaskStatus @default(TODO)
+  tags                 String[]   @default([])
+  preferredTimeOfDay   TimeOfDay  @default(ANY)
+  recurrenceRuleId     String?    @db.Uuid
+  /// For generated occurrences of a recurring task: the task that started the series.
+  seriesId             String?    @db.Uuid
+  occurrenceDate       DateTime?  @db.Date
+  completedAt          DateTime?  @db.Timestamptz(3)
+  createdAt            DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime   @updatedAt @db.Timestamptz(3)
+  deletedAt            DateTime?  @db.Timestamptz(3)
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category        ActivityCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  recurrenceRule  RecurrenceRule?   @relation(fields: [recurrenceRuleId], references: [id], onDelete: SetNull)
+  subtasks        Subtask[]
+  dependencies    TaskDependency[]  @relation("TaskDependsOn")
+  dependents      TaskDependency[]  @relation("TaskBlocks")
+  activities      Activity[]
+  recommendations Recommendation[]
+
+  @@unique([seriesId, occurrenceDate])
+  @@index([userId, status, deadline])
+  @@index([userId, deletedAt, createdAt])
+}
+
+model Subtask {
+  id        String   @id @default(uuid()) @db.Uuid
+  taskId    String   @db.Uuid
+  title     String   @db.VarChar(160)
+  isDone    Boolean  @default(false)
+  position  Int      @default(0) @db.SmallInt
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, position])
+}
+
+/// taskId cannot start until dependsOnId is completed. The service rejects cycles.
+model TaskDependency {
+  taskId      String   @db.Uuid
+  dependsOnId String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  task      Task @relation("TaskDependsOn", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn Task @relation("TaskBlocks", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+// ─── Recurring schedule ──────────────────────────────────────────────────────
+
+/// A named set of recurring commitments (e.g. "Work week", "Training plan").
+model Schedule {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  name      String   @db.VarChar(80)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events ScheduleEvent[]
+
+  @@unique([userId, name])
+}
+
+/// A recurring commitment defined in local wall-clock time. Occurrences are expanded
+/// on demand in the user's timezone, so they stay at the same local time across DST.
+model ScheduleEvent {
+  id               String   @id @default(uuid()) @db.Uuid
+  scheduleId       String   @db.Uuid
+  userId           String   @db.Uuid
+  categoryId       String   @db.Uuid
+  recurrenceRuleId String   @unique @db.Uuid
+  title            String   @db.VarChar(160)
+  /// Local start, minutes from midnight (0..1439).
+  startMinute      Int      @db.SmallInt
+  /// May exceed the remaining minutes of the day: the occurrence then crosses midnight.
+  durationMin      Int      @db.SmallInt
+  isFixed          Boolean  @default(true)
+  priority         Priority @default(MEDIUM)
+  energyRequired   Level    @default(MODERATE)
+  focusRequired    Level    @default(MODERATE)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  schedule       Schedule         @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category       ActivityCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  recurrenceRule RecurrenceRule   @relation(fields: [recurrenceRuleId], references: [id], onDelete: Cascade)
+  activities     Activity[]
+
+  @@index([userId, isActive])
+}
+
+model RecurrenceRule {
+  id         String              @id @default(uuid()) @db.Uuid
+  userId     String              @db.Uuid
+  frequency  RecurrenceFrequency
+  /// Every N days / weeks / months.
+  interval   Int                 @default(1) @db.SmallInt
+  /// ISO weekdays (1..7) for WEEKLY rules. Empty = weekday of startDate.
+  byWeekday  Int[]               @default([])
+  /// Day of month for MONTHLY rules (clamped to month length). Null = day of startDate.
+  byMonthDay Int?                @db.SmallInt
+  startDate  DateTime            @db.Date
+  untilDate  DateTime?           @db.Date
+  count      Int?
+  /// Local dates on which the occurrence is skipped.
+  exDates    DateTime[]          @default([]) @db.Date
+  createdAt  DateTime            @default(now()) @db.Timestamptz(3)
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduleEvent ScheduleEvent?
+  tasks         Task[]
+}
+
+// ─── Intelligence outputs ────────────────────────────────────────────────────
+
+/// Snapshot of computed free windows for a local day (recalculated on schedule changes).
+model AvailabilityWindow {
+  id              String           @id @default(uuid()) @db.Uuid
+  userId          String           @db.Uuid
+  date            DateTime         @db.Date
+  startsAt        DateTime         @db.Timestamptz(3)
+  endsAt          DateTime         @db.Timestamptz(3)
+  durationSec     Int
+  confidence      WindowConfidence
+  /// 0..100
+  confidenceScore Int              @db.SmallInt
+  computedAt      DateTime         @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+model Recommendation {
+  id                   String               @id @default(uuid()) @db.Uuid
+  userId               String               @db.Uuid
+  taskId               String               @db.Uuid
+  /// 0..100
+  score                Int                  @db.SmallInt
+  /// 0..100
+  confidence           Int                  @db.SmallInt
+  reasons              String[]
+  /// Per-factor contributions that produced the score (transparent scoring).
+  breakdown            Json
+  estimatedDurationSec Int
+  windowStart          DateTime             @db.Timestamptz(3)
+  windowEnd            DateTime             @db.Timestamptz(3)
+  status               RecommendationStatus @default(GENERATED)
+  generatedAt          DateTime             @default(now()) @db.Timestamptz(3)
+  resolvedAt           DateTime?            @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status, generatedAt])
+  @@index([taskId])
+}
+
+/// Derived pattern/insight values from the predictive engine (explainable statistics).
+model ProductivityMetric {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  key         String   @db.VarChar(60)
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+  value       Int
+  unit        String   @db.VarChar(20)
+  /// 0..100 — how much the data supports this value.
+  confidence  Int      @db.SmallInt
+  sampleSize  Int
+  payload     Json?
+  computedAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key, periodStart, periodEnd])
+}
+
+model DailyAnalytics {
+  id                    String   @id @default(uuid()) @db.Uuid
+  userId                String   @db.Uuid
+  date                  DateTime @db.Date
+  timezone              String   @db.VarChar(64)
+  plannedSec            Int      @default(0)
+  trackedSec            Int      @default(0)
+  productiveSec         Int      @default(0)
+  focusSec              Int      @default(0)
+  restSec               Int      @default(0)
+  leisureSec            Int      @default(0)
+  neutralSec            Int      @default(0)
+  deepWorkSessions      Int      @default(0)
+  /// Short unplanned gaps between tracked blocks.
+  leakageSec            Int      @default(0)
+  /// Past active-hours time with neither plan nor tracking. Not free time, not waste: unknown.
+  unknownSec            Int      @default(0)
+  plannedActivities     Int      @default(0)
+  completedActivities   Int      @default(0)
+  completedTasks        Int      @default(0)
+  contextSwitches       Int      @default(0)
+  /// Percentages are 0..100; null means "not enough data to measure".
+  adherencePct          Int?     @db.SmallInt
+  estimationAccuracyPct Int?     @db.SmallInt
+  productivityScore     Int?     @db.SmallInt
+  scoreBreakdown        Json?
+  /// [{ categoryId, key, name, color, timeClass, plannedSec, trackedSec }]
+  categoryBreakdown     Json
+  /// 24 buckets of tracked seconds by local hour: [{ hour, trackedSec, productiveSec }]
+  hourly                Json
+  computedAt            DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+}
+
+model WeeklyAnalytics {
+  id                  String   @id @default(uuid()) @db.Uuid
+  userId              String   @db.Uuid
+  /// Local date of the first day of the week (per UserPreference.weekStartsOn).
+  weekStart           DateTime @db.Date
+  plannedSec          Int      @default(0)
+  trackedSec          Int      @default(0)
+  productiveSec       Int      @default(0)
+  focusSec            Int      @default(0)
+  restSec             Int      @default(0)
+  leakageSec          Int      @default(0)
+  deepWorkSessions    Int      @default(0)
+  completedActivities Int      @default(0)
+  completedTasks      Int      @default(0)
+  activeDays          Int      @default(0) @db.SmallInt
+  avgProductivityScore Int?    @db.SmallInt
+  summary             Json
+  computedAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, weekStart])
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  type      NotificationType
+  title     String           @db.VarChar(160)
+  body      String           @db.VarChar(1000)
+  /// Deep-link target inside the app, e.g. "/tasks/<id>".
+  href      String?          @db.VarChar(300)
+  /// Idempotency key so a retried job never creates the same notification twice.
+  dedupeKey String?          @db.VarChar(200)
+  readAt    DateTime?        @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, readAt, createdAt])
+}
+
+// ─── AI coach ────────────────────────────────────────────────────────────────
+
+model AIConversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  title     String   @db.VarChar(160)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interactions   AIInteraction[]
+  pendingActions AIPendingAction[]
+
+  @@index([userId, updatedAt])
+}
+
+model AIInteraction {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @db.Uuid
+  userId         String   @db.Uuid
+  role           AiRole
+  content        String
+  /// "anthropic" or "demo".
+  provider       String   @db.VarChar(40)
+  model          String?  @db.VarChar(80)
+  /// True when the reply came from the deterministic demo engine, not a real model.
+  isDemo         Boolean  @default(false)
+  /// [{ name, input, ok, durationMs }]
+  toolCalls      Json?
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  /// Estimated cost in millionths of a US dollar.
+  costMicroUsd   Int      @default(0)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([userId, role, createdAt])
+}
+
+/// A schedule change proposed by the coach. Nothing is modified until the user confirms.
+model AIPendingAction {
+  id             String              @id @default(uuid()) @db.Uuid
+  userId         String              @db.Uuid
+  conversationId String              @db.Uuid
+  type           String              @db.VarChar(60)
+  summary        String              @db.VarChar(500)
+  payload        Json
+  status         PendingActionStatus @default(PENDING)
+  createdAt      DateTime            @default(now()) @db.Timestamptz(3)
+  expiresAt      DateTime            @db.Timestamptz(3)
+  resolvedAt     DateTime?           @db.Timestamptz(3)
+
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+// ─── Audit & messaging ───────────────────────────────────────────────────────
+
+/// Append-only audit trail (security events, time-entry corrections, AI tool calls, task history).
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @db.Uuid
+  /// "user", "system" or "ai-coach".
+  actor      String   @db.VarChar(40)
+  action     String   @db.VarChar(80)
+  entityType String   @db.VarChar(60)
+  entityId   String?  @db.VarChar(64)
+  before     Json?
+  after      Json?
+  metadata   Json?
+  ipAddress  String?  @db.VarChar(64)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId, createdAt])
+}
+
+/// Transactional outbox: domain events are inserted in the same transaction as the
+/// state change and relayed to the queue afterwards.
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  type          String    @db.VarChar(80)
+  aggregateType String    @db.VarChar(60)
+  aggregateId   String    @db.VarChar(64)
+  userId        String    @db.Uuid
+  payload       Json
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+  publishedAt   DateTime? @db.Timestamptz(3)
+  attempts      Int       @default(0)
+  lastError     String?   @db.VarChar(1000)
+
+  @@index([publishedAt, createdAt])
+  @@index([userId, createdAt])
+}
+
+/// Consumer-side idempotency: (eventId, handler) is recorded once the handler succeeded.
+model ProcessedEvent {
+  eventId     String   @db.Uuid
+  handler     String   @db.VarChar(80)
+  processedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([eventId, handler])
+}

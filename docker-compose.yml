@@ -1,0 +1,84 @@
+# TIMEFLOW development infrastructure.
+# Only stateful dependencies run here by default; the frontend and backend are
+# started independently (see README) so each keeps its own toolchain.
+#
+#   docker compose up -d                 -> postgres + redis
+#   docker compose --profile apps up -d  -> also builds and runs both apps
+name: timeflow
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: timeflow
+      POSTGRES_PASSWORD: timeflow_dev_password
+      POSTGRES_DB: timeflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - timeflow_pg:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timeflow -d timeflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # BullMQ requires that keys are never evicted.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - timeflow_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    profiles: ["apps"]
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/docker/backend.Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://timeflow:timeflow_dev_password@postgres:5432/timeflow?schema=public
+      REDIS_URL: redis://redis:6379
+      FRONTEND_ORIGIN: http://localhost:3000
+      # Development default only. Always override SESSION_SECRET outside local development.
+      SESSION_SECRET: ${SESSION_SECRET:-local-development-only-secret-change-me-0000}
+      # Local demo over plain http://localhost only. Behind HTTPS set COOKIE_SECURE=true and drop the override.
+      COOKIE_SECURE: "false"
+      ALLOW_INSECURE_COOKIES: "true"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4000/api/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    profiles: ["apps"]
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/docker/frontend.Dockerfile
+      args:
+        API_INTERNAL_URL: http://backend:4000
+    depends_on:
+      backend: { condition: service_healthy }
+    ports:
+      - "3000:3000"
+
+volumes:
+  timeflow_pg:
+  timeflow_redis:

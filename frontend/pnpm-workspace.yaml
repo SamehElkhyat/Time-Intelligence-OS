@@ -1,0 +1,14 @@
+# Standalone pnpm project (own lockfile and node_modules); not linked to the backend.
+packages:
+  - "."
+
+allowBuilds:
+  "@tailwindcss/oxide": true
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - "@playwright/test@1.65.1"
+  - playwright-core@1.65.1
+  - playwright@1.65.1

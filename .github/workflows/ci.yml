@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  PNPM_VERSION: "12"
+
+jobs:
+  backend:
+    name: Backend — typecheck, unit, integration, build
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend } }
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: timeflow, POSTGRES_PASSWORD: timeflow_ci, POSTGRES_DB: timeflow_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U timeflow" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://timeflow:timeflow_ci@localhost:5432/timeflow_test?schema=public
+      TEST_DATABASE_URL: postgresql://timeflow:timeflow_ci@localhost:5432/timeflow_test?schema=public
+      SESSION_SECRET: ci-only-session-secret-0123456789abcdef0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm, cache-dependency-path: backend/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma:generate
+      - run: pnpm typecheck
+      - run: pnpm test:unit
+      - run: pnpm test:integration
+      - run: pnpm build
+
+  frontend:
+    name: Frontend — typecheck, unit, build
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm, cache-dependency-path: frontend/pnpm-lock.yaml }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  contract:
+    name: API contract — generated types are up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - name: Regenerate OpenAPI from the backend
+        working-directory: backend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm prisma:generate
+          pnpm openapi:generate
+      - name: Regenerate frontend types
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm api:types
+      - name: Fail if the committed contract or types drifted
+        run: git diff --exit-code backend/docs/openapi.json frontend/src/types/api.gen.ts
+
+  e2e:
+    name: End-to-end (Playwright)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_USER: timeflow, POSTGRES_PASSWORD: timeflow_ci, POSTGRES_DB: timeflow }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U timeflow" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      DATABASE_URL: postgresql://timeflow:timeflow_ci@localhost:5432/timeflow?schema=public
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-only-session-secret-0123456789abcdef0123456789
+      FRONTEND_ORIGIN: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - name: Start backend
+        working-directory: backend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm prisma:generate
+          pnpm prisma:deploy
+          pnpm build
+          nohup node dist/src/main.js > ../backend.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:4000/api/health/live && break; sleep 2; done
+      - name: Install and run Playwright
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+          pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: e2e-report, path: "frontend/playwright-report\nfrontend/test-results\nbackend.log" }
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose --profile apps build
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - run: pnpm audit --prod --audit-level high
+        working-directory: backend
+      - run: pnpm audit --prod --audit-level high
+        working-directory: frontend

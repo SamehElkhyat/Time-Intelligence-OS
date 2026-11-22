@@ -1,0 +1,112 @@
+/*
+ * TIMEFLOW design tokens.
+ *
+ * Direction: premium enterprise SaaS, dark only. Near-black green-tinted surfaces separated by low
+ * contrast hairlines, with one energetic lime accent reserved for the primary action, the active
+ * state, progress and the single most important number on a screen. Orange and violet exist as
+ * secondary data series; they never decorate chrome.
+ *
+ * Every colour used by a component comes from here (see docs/DESIGN_SYSTEM.md).
+ */
+:root {
+  color-scheme: dark;
+
+  /* ── Surfaces (darkest → lightest) ─────────────────────────────── */
+  --background: #090c09;
+  --sidebar: #0b100b;
+  --surface: #0f140f;
+  --surface-2: #141b14;
+  --surface-elevated: #1a231a;
+  --overlay: rgb(4 7 4 / 0.72);
+
+  /* ── Lines ─────────────────────────────────────────────────────── */
+  --border: #212b21;
+  --border-strong: #2e3b2e;
+  --chart-grid: #1f2a1f;
+
+  /* ── Brand ─────────────────────────────────────────────────────── */
+  --primary: #b5f34d;
+  --primary-hover: #a2df3f;
+  --primary-pressed: #8fc834;
+  --primary-foreground: #13200a;
+  --primary-soft: rgb(181 243 77 / 0.1);
+  --primary-ring: rgb(181 243 77 / 0.45);
+
+  /* ── Text ──────────────────────────────────────────────────────── */
+  --text-primary: #f1f6ee;
+  --text-secondary: #a3b09f;
+  --text-muted: #6f7d6c;
+  --text-disabled: #485247;
+
+  /* ── Semantic ──────────────────────────────────────────────────── */
+  --success: #54d68b;
+  --warning: #f2bd55;
+  --danger: #f16d70;
+  --info: #4cc9f0;
+  --success-soft: rgb(84 214 139 / 0.12);
+  --warning-soft: rgb(242 189 85 / 0.12);
+  --danger-soft: rgb(241 109 112 / 0.12);
+  --info-soft: rgb(76 201 240 / 0.12);
+
+  /* ── Data series (charts, category chips). Lime first, then high-separation hues. ── */
+  --series-1: #b5f34d;
+  --series-2: #ff6a2b;
+  --series-3: #7c5cff;
+  --series-4: #4cc9f0;
+  --series-5: #f2bd55;
+  --series-6: #f472b6;
+  --series-muted: #3a473a;
+
+  /* ── Time-state colours used by the timeline and availability strip ── */
+  --state-tracked: #b5f34d;
+  --state-planned: #4cc9f0;
+  --state-free: #54d68b;
+  --state-buffer: #6f7d6c;
+  --state-unknown: #2a342a;
+  --state-conflict: #f16d70;
+
+  /* ── Shape ─────────────────────────────────────────────────────── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* ── Elevation ─────────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 8px 24px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--border);
+  --shadow-lg: 0 24px 60px -16px rgb(0 0 0 / 0.75), 0 0 0 1px var(--border-strong);
+  --glow-primary: 0 0 0 1px rgb(181 243 77 / 0.35), 0 8px 28px -10px rgb(181 243 77 / 0.35);
+
+  /* ── Spacing scale (4px base) ──────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── Typography ────────────────────────────────────────────────── */
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.625rem;
+  --text-3xl: 2.125rem;
+
+  /* ── Motion: short, purposeful, never decorative ───────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+
+  /* ── Layout ────────────────────────────────────────────────────── */
+  --sidebar-width: 264px;
+  --sidebar-width-collapsed: 72px;
+  --topbar-height: 64px;
+}
